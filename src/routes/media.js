@@ -7,6 +7,29 @@ const { BlobSASPermissions, generateBlobSASQueryParameters } = require('@azure/s
 
 const upload = multer({ storage: multer.memoryStorage() });
 
+// ── Logic App Workflow URL for CRUD notifications ──
+const LOGIC_APP_URL = 'https://prod-04.italynorth.logic.azure.com:443/workflows/45843d0ea27c4e56b97d2e7dc920c190/triggers/When_an_HTTP_request_is_received/paths/invoke?api-version=2016-10-01&sp=%2Ftriggers%2FWhen_an_HTTP_request_is_received%2Frun&sv=1.0&sig=8hUNGVkdfUFe2QOSTNNo_rKVhxd273bxmMuH30MzWSY';
+
+// ── Helper: Notify Logic App of CRUD operations ──
+async function notifyLogicApp(operation, mediaItem) {
+    try {
+        await fetch(LOGIC_APP_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                operation,
+                title: mediaItem.title || 'Unknown',
+                mediaType: mediaItem.mediaType || 'Unknown',
+                id: mediaItem.id,
+                timestamp: new Date().toISOString()
+            })
+        });
+        console.log(`Logic App notified: ${operation} - ${mediaItem.title}`);
+    } catch (error) {
+        console.error('Logic App notification failed:', error.message);
+    }
+}
+
 // ── Helper: Generate a time-limited SAS URL for viewing a blob ──
 async function generateSasUrl(blobName) {
     if (!blobServiceClient) return null;
@@ -85,6 +108,10 @@ router.post('/upload', upload.single('file'), async (req, res) => {
 
         const { resource } = await mediaContainer.items.create(mediaItem);
         console.log('Metadata saved to Cosmos DB, ID:', resource.id);
+
+        // Notify Logic App of new upload
+        notifyLogicApp('CREATE', resource);
+
         res.status(201).json(resource);
 
     } catch (error) {
@@ -190,6 +217,10 @@ router.put('/:id', async (req, res) => {
             .replace(updated);
 
         console.log('Updated media:', id);
+
+        // Notify Logic App of update
+        notifyLogicApp('UPDATE', resource);
+
         res.json(resource);
     } catch (error) {
         console.error('Update error:', error);
@@ -229,6 +260,10 @@ router.delete('/:id', async (req, res) => {
         // Delete metadata from Cosmos DB
         await mediaContainer.item(resource.id, resource.mediaType).delete();
         console.log('Deleted metadata for:', id);
+
+        // Notify Logic App of deletion
+        notifyLogicApp('DELETE', resource);
+
         res.status(204).send();
     } catch (error) {
         console.error('Delete error:', error);
